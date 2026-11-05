@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
 
+from .safety import md_inline, md_url
+
 try:  # optional: use the certifi CA bundle when installed (e.g. Windows/MSYS2)
     import certifi
 except ImportError:
@@ -127,7 +129,7 @@ def discover(root: Path, days: int = 7) -> dict:
     (folder / f"{stamp}.json").write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     lines = [f"# Trend discovery: {stamp}", "", "> Discovery leads only. Do not publish claims until independently verified.", ""]
     for i, item in enumerate(unique, 1):
-        lines.extend([f"## {i}. {item['title']}", f"- Pillar: {item['pillar']}", f"- Source: {item['source']}",
-                      f"- Published: {item.get('published_at') or 'Unknown'}", f"- URL: {item['url']}", f"- Summary: {item['summary']}", ""])
+        lines.extend([f"## {i}. {md_inline(item['title'])}", f"- Pillar: {md_inline(item['pillar'])}", f"- Source: {md_inline(item['source'])}",
+                      f"- Published: {item.get('published_at') or 'Unknown'}", f"- URL: {md_url(item['url']) or 'invalid'}", f"- Summary: {md_inline(item['summary'])}", ""])
     (folder / f"{stamp}.md").write_text("\n".join(lines), encoding="utf-8")
     return out
