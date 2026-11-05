@@ -8,6 +8,7 @@ from pathlib import Path
 from . import __version__
 from .engine import build_messages, call_llm, enforce_source_policy, latest_trends, read_idea, render_package, validate_package
 from .rss import discover
+from .safety import safe_log
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,16 +63,16 @@ def main(argv: list[str] | None = None) -> int:
             data = call_llm(build_messages(idea_text, trends, brand, policy))
             errors = validate_package(data)
             if errors:
-                print("\n".join(errors), file=sys.stderr)
+                print("\n".join(safe_log(e) for e in errors), file=sys.stderr)
                 return 2
             for note in enforce_source_policy(data, trends):
-                print(note, file=sys.stderr)
+                print(safe_log(note), file=sys.stderr)
             out = render_package(args.root, idea_path, idea_text, data)
             print(f"Package created: {out.relative_to(args.root)}")
             print("DRAFT only. Human fact-check and approval are mandatory.")
             return 0
         except Exception as exc:
-            print(f"Error: {exc}", file=sys.stderr)
+            print(f"Error: {safe_log(exc)}", file=sys.stderr)
             return 1
     return 1
 

@@ -10,6 +10,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .safety import md_block, md_inline, md_url
+
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 TRUSTED_API_HOSTS = frozenset({"api.openai.com"})
 
@@ -136,13 +138,32 @@ def build_messages(
     ]
 
 
+MAX_RESPONSE_BYTES = 5_000_000
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
+
+
+def _error_kind(exc: urllib.error.HTTPError) -> str:
+    """Return ' (error_type)' from an API error body, or '' - never the raw body."""
+    try:
+        err = json.loads(exc.read(4096).decode(errors="replace")).get("error", {})
+        kind = err.get("code") or err.get("type")
+    except (ValueError, AttributeError):
+        return ""
+    return f" ({kind})" if isinstance(kind, str) and _SAFE_TOKEN.match(kind) else ""
+
+
 def call_llm(prompt: str | list[dict]) -> dict:
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("OPENAI_API_KEY is missing. Configure it in .env.")
     base = resolve_base_url()
     model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-    timeout = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
+    try:
+        timeout = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        raise RuntimeError("OPENAI_TIMEOUT_SECONDS must be an integer.") from None
+    if not 1 <= timeout <= 600:
+        raise RuntimeError("OPENAI_TIMEOUT_SECONDS must be between 1 and 600.")
     messages = (
         prompt
         if isinstance(prompt, list)
@@ -164,53 +185,184 @@ def call_llm(prompt: str | list[dict]) -> dict:
     )
     try:
         with _OPENER.open(req, timeout=timeout) as response:
-            body = json.loads(response.read().decode())
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")[:1000]
-        raise RuntimeError(f"Model API returned HTTP {exc.code}: {detail}") from exc
-    content = body["choices"][0]["message"]["content"]
-    return json.loads(content)
+        try:
+            raise RuntimeError(f"Model API returned HTTP {exc.code}{_error_kind(exc)}") from None
+        finally:
+            exc.close()
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise RuntimeError("Model API response is too large.")
+    try:
+        choice = json.loads(raw.decode())["choices"][0]
+        content = choice["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise RuntimeError("Model API returned an unexpected response format.") from None
+    if choice.get("finish_reason") == "length":
+        raise RuntimeError("Model output was truncated (finish_reason=length).")
+    try:
+        return json.loads(content)
+    except (ValueError, TypeError):
+        raise RuntimeError("Model did not return valid JSON.") from None
 
 
-def validate_package(data: dict) -> list[str]:
-    errors = []
-    for key in (
-        "topic",
-        "research_brief",
-        "languages",
-        "storyboard",
-        "platform_variants",
-    ):
+REQUIRED_TOP = ("topic", "research_brief", "languages", "storyboard", "platform_variants")
+ALLOWED_TOP = REQUIRED_TOP + (
+    "pillar",
+    "editorial_angle",
+    "audience_value",
+    "derivative_ideas",
+    "production_notes",
+)
+LANGS = ("id", "en")
+PLATFORMS = ("tiktok", "instagram_reels", "youtube_shorts")
+CLAIM_STATUSES = frozenset({"VERIFIED", "NEEDS_VERIFICATION", "CONTEXT_ONLY"})
+_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_TAG = re.compile(r"^#?\w{1,100}$")
+MAX_SLIDES = 12
+MAX_SCENES = 30
+MAX_ITEMS = 30
+
+
+def _dict(errors: list[str], value: object, label: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return {}
+    return value
+
+
+def _list(errors: list[str], value: object, label: str, limit: int) -> list:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        errors.append(f"{label} must be an array")
+        return []
+    if len(value) > limit:
+        errors.append(f"{label} has more than {limit} items")
+        return value[:limit]
+    return value
+
+
+def _text(errors: list[str], value: object, label: str, limit: int) -> None:
+    if value is None or value == "":
+        return
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        errors.append(f"{label} must be text")
+    elif len(str(value)) > limit:
+        errors.append(f"{label} exceeds {limit} characters")
+
+
+def validate_package(data: object) -> list[str]:
+    """Validate model output: shape, types, enums and size limits. Never raises on bad input."""
+    if not isinstance(data, dict):
+        return ["Package must be a JSON object"]
+    errors: list[str] = []
+    for key in REQUIRED_TOP:
         if key not in data:
             errors.append(f"Missing top-level field: {key}")
-    for lang in ("id", "en"):
-        language = data.get("languages", {}).get(lang, {})
-        if not language.get("short_video", {}).get("narration"):
+    _text(errors, data.get("topic"), "topic", 200)
+    for key in ("pillar", "editorial_angle", "audience_value"):
+        _text(errors, data.get(key), key, 500)
+
+    langs = _dict(errors, data.get("languages"), "languages")
+    for lang in LANGS:
+        language = _dict(errors, langs.get(lang), f"languages.{lang}")
+        video = _dict(errors, language.get("short_video"), f"{lang}.short_video")
+        if not video.get("narration"):
             errors.append(f"Missing {lang} narration")
-        if len(language.get("carousel", {}).get("slides", [])) < 5:
+        for field, limit in (("narration", 3000), ("title", 200), ("hook", 300), ("cta", 300)):
+            _text(errors, video.get(field), f"{lang}.short_video.{field}", limit)
+        carousel = _dict(errors, language.get("carousel"), f"{lang}.carousel")
+        slides = _list(errors, carousel.get("slides"), f"{lang}.carousel.slides", MAX_SLIDES)
+        if len(slides) < 5:
             errors.append(f"{lang} carousel needs at least 5 slides")
-        for platform in ("tiktok", "instagram_reels", "youtube_shorts"):
-            if (
-                not data.get("platform_variants", {})
-                .get(lang, {})
-                .get(platform, {})
-                .get("caption")
-            ):
+        for i, raw in enumerate(slides, 1):
+            slide = _dict(errors, raw, f"{lang}.carousel.slides[{i}]")
+            for field, limit in (("headline", 200), ("body", 1000), ("visual_direction", 500)):
+                _text(errors, slide.get(field), f"{lang}.slide{i}.{field}", limit)
+
+    variants = _dict(errors, data.get("platform_variants"), "platform_variants")
+    for lang in LANGS:
+        per_lang = _dict(errors, variants.get(lang), f"platform_variants.{lang}")
+        for platform in PLATFORMS:
+            details = _dict(errors, per_lang.get(platform), f"{lang}/{platform}")
+            if not details.get("caption"):
                 errors.append(f"Missing caption: {lang}/{platform}")
-    if not data.get("storyboard"):
+            _text(errors, details.get("title"), f"{lang}/{platform} title", 200)
+            _text(errors, details.get("caption"), f"{lang}/{platform} caption", 2200)
+            for tag in _list(errors, details.get("hashtags"), f"{lang}/{platform} hashtags", 30):
+                if not isinstance(tag, str) or not _TAG.match(tag):
+                    errors.append(f"Invalid hashtag in {lang}/{platform}")
+                    break
+
+    scenes = _list(errors, data.get("storyboard"), "storyboard", MAX_SCENES)
+    if not scenes:
         errors.append("Storyboard is empty")
-    allowed = {"VERIFIED", "NEEDS_VERIFICATION", "CONTEXT_ONLY"}
-    source_ids = {
-        s.get("id") for s in data.get("research_brief", {}).get("sources", [])
-    }
-    for claim in data.get("research_brief", {}).get("claims", []):
-        if claim.get("status") not in allowed:
-            errors.append(f"Invalid claim status: {claim.get('id')}")
-        if claim.get("status") == "VERIFIED" and not set(
-            claim.get("source_ids", [])
-        ).intersection(source_ids):
-            errors.append(f"Verified claim has no source: {claim.get('id')}")
+    for i, raw in enumerate(scenes, 1):
+        scene = _dict(errors, raw, f"storyboard[{i}]")
+        for field in ("start", "scene", "visual", "overlay"):
+            _text(errors, scene.get(field), f"storyboard[{i}].{field}", 500)
+
+    brief = _dict(errors, data.get("research_brief"), "research_brief")
+    _text(errors, brief.get("thesis"), "research_brief.thesis", 1000)
+    _text(errors, brief.get("editorial_disclaimer"), "research_brief.editorial_disclaimer", 1000)
+    for q in _list(errors, brief.get("open_questions"), "research_brief.open_questions", 20):
+        _text(errors, q, "open question", 500)
+
+    source_ids: set[str] = set()
+    for raw in _list(errors, brief.get("sources"), "research_brief.sources", MAX_ITEMS):
+        source = _dict(errors, raw, "source")
+        sid = source.get("id")
+        if not isinstance(sid, str) or not _ID.match(sid):
+            errors.append("Source has an invalid id")
+        elif sid in source_ids:
+            errors.append(f"Duplicate source id: {sid}")
+        else:
+            source_ids.add(sid)
+        for field, limit in (("title", 300), ("url", 2048), ("publisher", 200), ("published_at", 64),
+                             ("source_type", 64), ("what_it_supports", 500)):
+            _text(errors, source.get(field), f"source {sid} {field}", limit)
+
+    claim_ids: set[str] = set()
+    for raw in _list(errors, brief.get("claims"), "research_brief.claims", MAX_ITEMS):
+        claim = _dict(errors, raw, "claim")
+        cid = claim.get("id")
+        if not isinstance(cid, str) or not _ID.match(cid):
+            errors.append("Claim has an invalid id")
+        elif cid in claim_ids:
+            errors.append(f"Duplicate claim id: {cid}")
+        else:
+            claim_ids.add(cid)
+        _text(errors, claim.get("claim"), f"claim {cid} text", 1000)
+        _text(errors, claim.get("caveat"), f"claim {cid} caveat", 1000)
+        status = claim.get("status")
+        if status not in CLAIM_STATUSES:
+            errors.append(f"Invalid claim status: {cid}")
+        ids = _list(errors, claim.get("source_ids"), f"claim {cid} source_ids", 10)
+        if not all(isinstance(i, str) for i in ids):
+            errors.append(f"Claim {cid} source_ids must be strings")
+            ids = [i for i in ids if isinstance(i, str)]
+        if status == "VERIFIED" and not set(ids) & source_ids:
+            errors.append(f"Verified claim has no source: {cid}")
     return errors
+
+
+def prune_package(data: dict) -> dict:
+    """Return a copy containing only known keys: no extra top-level keys, languages or platforms."""
+    clean = {k: data[k] for k in ALLOWED_TOP if k in data}
+    langs = clean.get("languages")
+    if isinstance(langs, dict):
+        clean["languages"] = {k: langs[k] for k in LANGS if k in langs}
+    variants = clean.get("platform_variants")
+    if isinstance(variants, dict):
+        clean["platform_variants"] = {
+            lang: {p: variants[lang][p] for p in PLATFORMS if p in variants[lang]}
+            for lang in LANGS
+            if isinstance(variants.get(lang), dict)
+        }
+    return clean
 
 
 VERIFIABLE_TRUST = frozenset({"primary", "primary_or_institutional"})
@@ -261,92 +413,94 @@ def enforce_source_policy(data: dict, trends: list[dict]) -> list[str]:
     return notes
 
 
+def _write(out: Path, rel: str, text: str) -> None:
+    """Write inside the package directory only; refuse anything that resolves outside it."""
+    target = (out / rel).resolve()
+    if not target.is_relative_to(out.resolve()):
+        raise ValueError(f"Refusing to write outside the package directory: {rel}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+
+
 def render_package(root: Path, idea_path: Path, idea_text: str, data: dict) -> Path:
+    data = prune_package(data)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out = root / "content" / "production" / f"{stamp}-{idea_path.stem}"
     out.mkdir(parents=True, exist_ok=False)
-    (out / "package.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (out / "source_backlog_idea.md").write_text(idea_text, encoding="utf-8")
+    _write(out, "package.json", json.dumps(data, ensure_ascii=False, indent=2))
+    _write(out, "source_backlog_idea.md", idea_text)
     brief = data.get("research_brief", {})
     lines = [
-        f"# Research brief: {data.get('topic', '')}",
+        f"# Research brief: {md_inline(data.get('topic', ''))}",
         "",
-        f"**Thesis:** {brief.get('thesis', '')}",
+        f"**Thesis:** {md_inline(brief.get('thesis', ''))}",
         "",
         "## Claims",
         "",
     ]
     for claim in brief.get("claims", []):
+        ids = ", ".join(md_inline(i) for i in claim.get("source_ids", []))
         lines.append(
-            f"- **{claim.get('status')}** {claim.get('claim')} (sources: {', '.join(claim.get('source_ids', []))}; caveat: {claim.get('caveat', '')})"
+            f"- **{md_inline(claim.get('status'))}** {md_inline(claim.get('claim'))} "
+            f"(sources: {ids}; caveat: {md_inline(claim.get('caveat', ''))})"
         )
     lines += ["", "## Sources", ""]
     for source in brief.get("sources", []):
-        lines.append(
-            f"- [{source.get('title', source.get('id', 'Source'))}]({source.get('url', '')}) · {source.get('publisher', '')} · {source.get('published_at', '')} · {source.get('what_it_supports', '')}"
-        )
-    lines += ["", "## Open questions", ""] + [
-        f"- {x}" for x in brief.get("open_questions", [])
-    ]
-    (out / "research_brief.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    scripts = out / "scripts"
-    scripts.mkdir()
-    for lang in ("id", "en"):
+        label = md_inline(source.get("title") or source.get("id") or "Source")
+        url = md_url(source.get("url", ""))
+        head = f"[{label}]({url})" if url else f"{label} (no verified URL)"
+        meta = " · ".join(md_inline(source.get(k, "")) for k in ("publisher", "published_at", "what_it_supports"))
+        lines.append(f"- {head} · {meta}")
+    lines += ["", "## Open questions", ""] + [f"- {md_inline(x)}" for x in brief.get("open_questions", [])]
+    _write(out, "research_brief.md", "\n".join(lines) + "\n")
+    for lang in LANGS:
         obj = data.get("languages", {}).get(lang, {})
         video = obj.get("short_video", {})
         carousel = obj.get("carousel", {})
         text = [
-            f"# {data.get('topic', '')} · {lang.upper()}",
+            f"# {md_inline(data.get('topic', ''))} · {lang.upper()}",
             "",
             "**DRAFT: human review required**",
             "",
-            f"## {video.get('title', '')}",
+            f"## {md_inline(video.get('title', ''))}",
             "",
-            f"**Hook:** {video.get('hook', '')}",
+            f"**Hook:** {md_inline(video.get('hook', ''))}",
             "",
-            video.get("narration", ""),
+            md_block(video.get("narration", "")),
             "",
-            f"**CTA:** {video.get('cta', '')}",
+            f"**CTA:** {md_inline(video.get('cta', ''))}",
             "",
             "## Carousel",
             "",
         ]
         for i, slide in enumerate(carousel.get("slides", []), 1):
             text += [
-                f"### {i}. {slide.get('headline', '')}",
-                slide.get("body", ""),
-                f"Visual: {slide.get('visual_direction', '')}",
+                f"### {i}. {md_inline(slide.get('headline', ''))}",
+                md_block(slide.get("body", "")),
+                f"Visual: {md_inline(slide.get('visual_direction', ''))}",
                 "",
             ]
-        (scripts / f"{lang}.md").write_text("\n".join(text), encoding="utf-8")
-    story = [
-        "# Storyboard",
-        "",
-        "| Time | Scene | Visual | Overlay |",
-        "|---|---|---|---|",
-    ]
+        _write(out, f"scripts/{lang}.md", "\n".join(text))
+    story = ["# Storyboard", "", "| Time | Scene | Visual | Overlay |", "|---|---|---|---|"]
     for scene in data.get("storyboard", []):
-        story.append(
-            "| "
-            + " | ".join(
-                str(scene.get(k, "")).replace("|", "\\|").replace("\n", " ")
-                for k in ("start", "scene", "visual", "overlay")
+        story.append("| " + " | ".join(md_inline(scene.get(k, "")) for k in ("start", "scene", "visual", "overlay")) + " |")
+    _write(out, "storyboard.md", "\n".join(story) + "\n")
+    for lang in LANGS:
+        for platform in PLATFORMS:
+            details = data.get("platform_variants", {}).get(lang, {}).get(platform)
+            if not details:
+                continue
+            tags = " ".join(md_inline(t) for t in details.get("hashtags", []))
+            content = (
+                f"# {platform} · {lang.upper()}\n\n**DRAFT: do not publish before editorial approval**\n\n"
+                f"## Title\n{md_inline(details.get('title', ''))}\n\n## Caption\n{md_block(details.get('caption', ''))}\n\n"
+                f"## Hashtags\n{tags}\n\n- [ ] Claims verified\n- [ ] Assets licensed\n- [ ] Human approval recorded\n"
             )
-            + " |"
-        )
-    (out / "storyboard.md").write_text("\n".join(story) + "\n", encoding="utf-8")
-    pub = out / "publication"
-    pub.mkdir()
-    for lang in ("id", "en"):
-        for platform, details in (
-            data.get("platform_variants", {}).get(lang, {}).items()
-        ):
-            content = f"# {platform} · {lang.upper()}\n\n**DRAFT — do not publish before editorial approval**\n\n## Title\n{details.get('title', '')}\n\n## Caption\n{details.get('caption', '')}\n\n## Hashtags\n{' '.join(details.get('hashtags', []))}\n\n- [ ] Claims verified\n- [ ] Assets licensed\n- [ ] Human approval recorded\n"
-            (pub / f"{lang}-{platform}.md").write_text(content, encoding="utf-8")
-    (out / "README.md").write_text(
-        "# Production package\n\nGenerated draft. Verify every claim against original sources, confirm bilingual parity and asset rights, and record human approval before publication.\n",
-        encoding="utf-8",
+            _write(out, f"publication/{lang}-{platform}.md", content)
+    _write(
+        out,
+        "README.md",
+        "# Production package\n\nGenerated draft. Verify every claim against original sources, confirm bilingual parity "
+        "and asset rights, and record human approval before publication.\n",
     )
     return out

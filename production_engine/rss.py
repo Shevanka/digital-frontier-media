@@ -5,11 +5,13 @@ import json
 import os
 import re
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
+
+from .fetch import fetch_limited, reject_dtd
+from .safety import md_inline, md_url, safe_log
 
 try:  # optional: use the certifi CA bundle when installed (e.g. Windows/MSYS2)
     import certifi
@@ -63,9 +65,8 @@ def safe_url(value: str | None) -> str | None:
     return value
 
 def fetch_feed(url: str, name: str, pillar: str, trust: str, timeout: int = 20) -> list[dict]:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        raw = response.read(3_000_000)
+    raw = fetch_limited(url, headers={"User-Agent": UA}, timeout=timeout)
+    reject_dtd(raw)
     root = ET.fromstring(raw)
     out = []
     for node in root.findall(".//item"):
@@ -99,13 +100,13 @@ def discover(root: Path, days: int = 7) -> dict:
         try:
             items.extend(fetch_feed(feed["url"], feed["name"], feed["pillar"], feed.get("trust", "secondary")))
         except Exception as exc:
-            errors.append({"source": feed.get("name", feed["url"]), "error": str(exc)[:300]})
+            errors.append({"source": feed.get("name", feed["url"]), "error": safe_log(exc, 300)})
     for query in config.get("google_news_queries", []):
         url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query["query"]) + "&hl=en-US&gl=US&ceid=US:en"
         try:
             items.extend(fetch_feed(url, "Google News RSS", query["pillar"], "discovery_only"))
         except Exception as exc:
-            errors.append({"source": "Google News RSS", "error": str(exc)[:300]})
+            errors.append({"source": "Google News RSS", "error": safe_log(exc, 300)})
     cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
     seen, unique = set(), []
     for item in items:
@@ -127,7 +128,7 @@ def discover(root: Path, days: int = 7) -> dict:
     (folder / f"{stamp}.json").write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     lines = [f"# Trend discovery: {stamp}", "", "> Discovery leads only. Do not publish claims until independently verified.", ""]
     for i, item in enumerate(unique, 1):
-        lines.extend([f"## {i}. {item['title']}", f"- Pillar: {item['pillar']}", f"- Source: {item['source']}",
-                      f"- Published: {item.get('published_at') or 'Unknown'}", f"- URL: {item['url']}", f"- Summary: {item['summary']}", ""])
+        lines.extend([f"## {i}. {md_inline(item['title'])}", f"- Pillar: {md_inline(item['pillar'])}", f"- Source: {md_inline(item['source'])}",
+                      f"- Published: {item.get('published_at') or 'Unknown'}", f"- URL: {md_url(item['url']) or 'invalid'}", f"- Summary: {md_inline(item['summary'])}", ""])
     (folder / f"{stamp}.md").write_text("\n".join(lines), encoding="utf-8")
     return out
