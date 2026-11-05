@@ -22,7 +22,7 @@ def load_dotenv() -> None:
             os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 def backlog() -> int:
-    ideas = sorted(p for p in (ROOT / "content" / "ideas").glob("*.md") if p.name != "30_CONTENT_IDEAS.md")
+    ideas = sorted(p for p in (ROOT / "content" / "ideas").glob("*.md") if not p.name.startswith("README") and p.name != "30_CONTENT_IDEAS.md")
     print(f"Backlog ideas: {len(ideas)}")
     for path in ideas:
         title = next((line[2:].strip() for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("# ")), path.stem)

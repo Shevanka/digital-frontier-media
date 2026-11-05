@@ -8,6 +8,11 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html import unescape
+try:
+    import certifi, os
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+except ImportError:
+    pass
 from pathlib import Path
 
 UA = "DigitalFrontierResearchBot/0.1"
@@ -91,5 +96,5 @@ def discover(root: Path, days: int = 7) -> dict:
     for i, item in enumerate(unique, 1):
         lines.extend([f"## {i}. {item['title']}", f"- Pillar: {item['pillar']}", f"- Source: {item['source']}",
                       f"- Published: {item.get('published_at') or 'Unknown'}", f"- URL: {item['url']}", f"- Summary: {item['summary']}", ""])
-    (folder / f"{stamp}.md").write_text("\\n".join(lines), encoding="utf-8")
+    (folder / f"{stamp}.md").write_text("\n".join(lines), encoding="utf-8")
     return out

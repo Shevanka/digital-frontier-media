@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def read_idea(root: Path, identifier: str) -> tuple[Path, str]:
-    candidates = [p for p in (root / "content" / "ideas").glob("*.md") if p.name != "30_CONTENT_IDEAS.md"]
+    candidates = [p for p in (root / "content" / "ideas").glob("*.md") if not p.name.startswith("README") and p.name != "30_CONTENT_IDEAS.md"]
     matches = [p for p in candidates if p.stem == identifier or p.stem.endswith(identifier) or identifier in p.stem]
     if not matches:
         raise FileNotFoundError(f"No idea matched '{identifier}'. Run the backlog command.")
