@@ -15,9 +15,7 @@ class FakeResponse(io.BytesIO):
 
 
 def fetch(xml: str):
-    with mock.patch.object(
-        rss.urllib.request, "urlopen", return_value=FakeResponse(xml.encode())
-    ):
+    with mock.patch.object(rss, "fetch_limited", return_value=xml.encode()):
         return rss.fetch_feed("https://feed.example/rss", "Feed", "AI", "secondary")
 
 

@@ -5,12 +5,12 @@ import json
 import os
 import re
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
 
+from .fetch import fetch_limited, reject_dtd
 from .safety import md_inline, md_url
 
 try:  # optional: use the certifi CA bundle when installed (e.g. Windows/MSYS2)
@@ -65,9 +65,8 @@ def safe_url(value: str | None) -> str | None:
     return value
 
 def fetch_feed(url: str, name: str, pillar: str, trust: str, timeout: int = 20) -> list[dict]:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        raw = response.read(3_000_000)
+    raw = fetch_limited(url, headers={"User-Agent": UA}, timeout=timeout)
+    reject_dtd(raw)
     root = ET.fromstring(raw)
     out = []
     for node in root.findall(".//item"):
