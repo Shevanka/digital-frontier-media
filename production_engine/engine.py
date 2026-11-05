@@ -152,6 +152,54 @@ def validate_package(data: dict) -> list[str]:
     return errors
 
 
+VERIFIABLE_TRUST = frozenset({"primary", "primary_or_institutional"})
+
+
+def enforce_source_policy(data: dict, trends: list[dict]) -> list[str]:
+    """Deterministically bind sources to trend leads and cap claim statuses.
+
+    - A source is kept only if its URL exactly matches a trend lead; its title,
+      publisher, published_at and url are then taken from the lead, never from the model.
+    - A claim stays VERIFIED only if it cites at least one source and every cited
+      source is a lead with primary/institutional trust. Aggregator and secondary
+      leads (e.g. Google News, 'discovery_only') can never verify a claim.
+
+    Mutates `data` and returns human-readable notes about what was changed.
+    """
+    notes: list[str] = []
+    leads = {i.get("url"): i for i in trends if isinstance(i, dict) and i.get("url")}
+    brief = data.get("research_brief")
+    if not isinstance(brief, dict):
+        return notes
+    trust_by_id: dict[str, str | None] = {}
+    for source in brief.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        lead = leads.get(source.get("url"))
+        if lead is None:
+            source["url"] = ""
+            source["source_type"] = "suggested_source_not_yet_verified"
+            trust_by_id[str(source.get("id"))] = None
+            continue
+        source["title"] = lead.get("title", "")
+        source["publisher"] = lead.get("source", "")
+        source["published_at"] = lead.get("published_at") or ""
+        source["source_type"] = "trend_lead"
+        source["source_trust"] = lead.get("source_trust", "unknown")
+        trust_by_id[str(source.get("id"))] = source["source_trust"]
+    for claim in brief.get("claims", []):
+        if not isinstance(claim, dict) or claim.get("status") != "VERIFIED":
+            continue
+        ids = claim.get("source_ids") or []
+        ok = bool(ids) and all(trust_by_id.get(str(i)) in VERIFIABLE_TRUST for i in ids)
+        if not ok:
+            claim["status"] = "NEEDS_VERIFICATION"
+            notes.append(
+                f"Claim {claim.get('id')} downgraded: not backed solely by primary-trust leads"
+            )
+    return notes
+
+
 def render_package(root: Path, idea_path: Path, idea_text: str, data: dict) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out = root / "content" / "production" / f"{stamp}-{idea_path.stem}"
