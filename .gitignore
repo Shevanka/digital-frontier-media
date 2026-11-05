@@ -6,3 +6,10 @@ __pycache__/
 content/production/*
 research/trends/*.json
 research/trends/*.md
+.env.*
+!.env.example
+*.pem
+*.key
+*.egg-info/
+dist/
+build/

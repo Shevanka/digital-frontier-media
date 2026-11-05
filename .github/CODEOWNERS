@@ -1,0 +1,6 @@
+# Security-sensitive paths need review from the repository owner.
+/production_engine/ @Shevanka
+/production_engine/config/ @Shevanka
+/.github/ @Shevanka
+/pyproject.toml @Shevanka
+/operations/PUBLISHING_CHECKLIST.md @Shevanka
