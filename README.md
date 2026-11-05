@@ -2,31 +2,59 @@
 
 **Understand Tomorrow, Today.**
 
-The Digital Frontier is an editorial technology media project covering artificial intelligence, technology, cybersecurity, tech news and internet culture, and the future of digital society. It aims to explain not only what is happening, but how it works and why it matters.
+The Digital Frontier is a bilingual editorial technology media project for Indonesian and global audiences. It covers artificial intelligence, technology and innovation, cybersecurity, tech news and internet culture, and the future of digital society.
 
 ## Editorial pillars
 
-- AI (30%)
-- Technology (20%)
-- Cybersecurity (25%)
-- Tech News & Internet Culture (15%)
-- Future & Digital Society (10%)
+| Pillar | Initial allocation |
+|---|---:|
+| Artificial Intelligence | 30% |
+| Technology & Innovation | 20% |
+| Cybersecurity | 25% |
+| Tech News & Internet Culture | 15% |
+| Future & Digital Society | 10% |
 
-## Content formats
+## Production workflow
 
-Primary formats are short-form videos for TikTok, Instagram Reels, and YouTube Shorts, supported by carousels and longer-form explainers. Content may be adapted into Indonesian and English while preserving the same verified facts, context, and caveats.
+1. Select an evergreen topic from `content/ideas/` or discover a recent trend lead.
+2. Research original sources and record claims, evidence, dates, and caveats.
+3. Generate Indonesian and English drafts from one canonical factual brief.
+4. Review scripts, storyboard, carousel copy, and platform-specific metadata.
+5. Produce and edit the video, then complete the publishing checklist.
+6. Publish manually after human approval and record performance.
 
-## Editorial standards
+## Quick start
 
-- Verify current claims, statistics, incidents, and dated news before publication.
-- Treat trend feeds and headlines as research leads, not proof.
-- Distinguish verified facts from claims requiring verification and contextual commentary.
-- Require human editorial review before publishing.
+Requires Python 3.10+.
 
-## Repository
+```bash
+python -m production_engine.cli backlog
+python -m production_engine.cli discover --days 7
+```
 
-This repository contains the brand strategy, research and fact-checking policy, content briefs, production templates, operational checklists, analytics resources, and AI-assisted content production tooling.
+For AI-assisted package generation, copy `production_engine/config/.env.example` to `.env`, set `OPENAI_API_KEY`, and run:
 
-## Status
+```bash
+python -m production_engine.cli produce --idea 01_ai-agents
+```
 
-The repository is being initialized. See the project documentation and production system as they are added.
+The CLI uses an OpenAI-compatible Chat Completions endpoint. You can configure `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_TIMEOUT_SECONDS`. Never commit API credentials.
+
+## Repository guide
+
+- `docs/`: brand, editorial, platform, and production-system documentation.
+- `content/ideas/`: initial editorial backlog.
+- `content/production/`: generated production packages.
+- `production_engine/`: Python CLI, RSS discovery, and AI-assisted package generation.
+- `research/`: fact-check policy, source notes, and trend snapshots.
+- `templates/`: script, carousel, bilingual adaptation, and trend-report templates.
+- `operations/`: production and publication checklists.
+- `analytics/`: content tracker and weekly review resources.
+
+## Editorial safeguards
+
+RSS headlines and summaries are discovery leads, not evidence. Verify every material claim against original sources. Remove or resolve claims marked `NEEDS_VERIFICATION` before recording or publishing. Indonesian and English versions must preserve the same factual scope and caveats. AI-generated materials are drafts only; human editorial approval is mandatory. This repository does not automatically publish to social platforms.
+
+## Current scope
+
+The CLI creates text-based research briefs, scripts, storyboards, carousel copy, and publication metadata. It does not render finished video, synthesize voice, license assets, or publish content. Those remain human-controlled production steps.
