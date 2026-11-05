@@ -54,6 +54,19 @@ class BaseUrlTests(unittest.TestCase):
                 engine.resolve_base_url("https://api.openai.com.evil.example/v1")
 
 
+class SourceConfigTests(unittest.TestCase):
+    def test_aggregator_feeds_are_never_primary_trust(self):
+        from pathlib import Path
+        from urllib.parse import urlsplit
+
+        path = Path(engine.__file__).parent / "config" / "sources.json"
+        for feed in json.loads(path.read_text(encoding="utf-8"))["feeds"]:
+            if urlsplit(feed["url"]).hostname == "news.google.com":
+                self.assertNotIn(
+                    feed.get("trust"), engine.VERIFIABLE_TRUST, feed["name"]
+                )
+
+
 class RedirectTests(unittest.TestCase):
     def test_redirect_is_not_followed_and_key_not_forwarded(self):
         seen = []

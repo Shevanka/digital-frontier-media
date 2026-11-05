@@ -8,10 +8,10 @@
       "trust": "secondary"
     },
     {
-      "name": "CISA Alerts",
+      "name": "CISA advisories (via Google News)",
       "url": "https://news.google.com/rss/search?q=site:cisa.gov+cybersecurity-advisories&hl=en-US&gl=US&ceid=US:en",
       "pillar": "Cybersecurity",
-      "trust": "primary_or_institutional"
+      "trust": "discovery_only"
     },
     {
       "name": "Google AI Blog",

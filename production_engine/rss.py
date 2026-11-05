@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import email.utils
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -14,6 +15,13 @@ try:
 except ImportError:
     pass
 from pathlib import Path
+
+try:  # optional: use the certifi CA bundle when installed (e.g. Windows/MSYS2)
+    import certifi
+except ImportError:
+    certifi = None
+if certifi is not None:
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 UA = "DigitalFrontierResearchBot/0.1"
 
