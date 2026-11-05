@@ -10,6 +10,13 @@ class EngineTests(unittest.TestCase):
         self.assertIsNotNone(parse_date("Wed, 05 Nov 2026 10:00:00 GMT"))
         self.assertIsNone(parse_date("not a date"))
 
+    def test_read_idea_ignores_readme(self):
+        from pathlib import Path
+        from production_engine.engine import read_idea
+        root = Path(__file__).resolve().parents[1]
+        with self.assertRaises(FileNotFoundError):
+            read_idea(root, "README")
+
     def test_validate_package_rejects_empty_data(self):
         errors = validate_package({})
         self.assertTrue(errors)
