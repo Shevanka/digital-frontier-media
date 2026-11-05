@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 from . import __version__
-from .engine import build_prompt, call_llm, enforce_source_policy, latest_trends, read_idea, render_package, validate_package
+from .engine import build_messages, call_llm, enforce_source_policy, latest_trends, read_idea, render_package, validate_package
 from .rss import discover
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             trends = latest_trends(args.root, args.trend_limit)
             brand = (args.root / "docs" / "BRAND_GUIDE.md").read_text(encoding="utf-8")
             policy = (args.root / "research" / "RESEARCH_AND_FACT_CHECK_POLICY.md").read_text(encoding="utf-8")
-            data = call_llm(build_prompt(idea_text, trends, brand, policy))
+            data = call_llm(build_messages(idea_text, trends, brand, policy))
             errors = validate_package(data)
             if errors:
                 print("\n".join(errors), file=sys.stderr)
