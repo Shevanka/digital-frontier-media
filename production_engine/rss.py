@@ -9,11 +9,6 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html import unescape
-try:
-    import certifi, os
-    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-except ImportError:
-    pass
 from pathlib import Path
 
 try:  # optional: use the certifi CA bundle when installed (e.g. Windows/MSYS2)
