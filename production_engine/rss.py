@@ -11,7 +11,7 @@ from html import unescape
 from pathlib import Path
 
 from .fetch import fetch_limited, reject_dtd
-from .safety import md_inline, md_url
+from .safety import md_inline, md_url, safe_log
 
 try:  # optional: use the certifi CA bundle when installed (e.g. Windows/MSYS2)
     import certifi
@@ -100,13 +100,13 @@ def discover(root: Path, days: int = 7) -> dict:
         try:
             items.extend(fetch_feed(feed["url"], feed["name"], feed["pillar"], feed.get("trust", "secondary")))
         except Exception as exc:
-            errors.append({"source": feed.get("name", feed["url"]), "error": str(exc)[:300]})
+            errors.append({"source": feed.get("name", feed["url"]), "error": safe_log(exc, 300)})
     for query in config.get("google_news_queries", []):
         url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query["query"]) + "&hl=en-US&gl=US&ceid=US:en"
         try:
             items.extend(fetch_feed(url, "Google News RSS", query["pillar"], "discovery_only"))
         except Exception as exc:
-            errors.append({"source": "Google News RSS", "error": str(exc)[:300]})
+            errors.append({"source": "Google News RSS", "error": safe_log(exc, 300)})
     cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
     seen, unique = set(), []
     for item in items:

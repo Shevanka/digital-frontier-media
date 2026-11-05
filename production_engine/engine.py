@@ -138,13 +138,32 @@ def build_messages(
     ]
 
 
+MAX_RESPONSE_BYTES = 5_000_000
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
+
+
+def _error_kind(exc: urllib.error.HTTPError) -> str:
+    """Return ' (error_type)' from an API error body, or '' - never the raw body."""
+    try:
+        err = json.loads(exc.read(4096).decode(errors="replace")).get("error", {})
+        kind = err.get("code") or err.get("type")
+    except (ValueError, AttributeError):
+        return ""
+    return f" ({kind})" if isinstance(kind, str) and _SAFE_TOKEN.match(kind) else ""
+
+
 def call_llm(prompt: str | list[dict]) -> dict:
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("OPENAI_API_KEY is missing. Configure it in .env.")
     base = resolve_base_url()
     model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-    timeout = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
+    try:
+        timeout = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        raise RuntimeError("OPENAI_TIMEOUT_SECONDS must be an integer.") from None
+    if not 1 <= timeout <= 600:
+        raise RuntimeError("OPENAI_TIMEOUT_SECONDS must be between 1 and 600.")
     messages = (
         prompt
         if isinstance(prompt, list)
@@ -166,12 +185,25 @@ def call_llm(prompt: str | list[dict]) -> dict:
     )
     try:
         with _OPENER.open(req, timeout=timeout) as response:
-            body = json.loads(response.read().decode())
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")[:1000]
-        raise RuntimeError(f"Model API returned HTTP {exc.code}: {detail}") from exc
-    content = body["choices"][0]["message"]["content"]
-    return json.loads(content)
+        try:
+            raise RuntimeError(f"Model API returned HTTP {exc.code}{_error_kind(exc)}") from None
+        finally:
+            exc.close()
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise RuntimeError("Model API response is too large.")
+    try:
+        choice = json.loads(raw.decode())["choices"][0]
+        content = choice["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise RuntimeError("Model API returned an unexpected response format.") from None
+    if choice.get("finish_reason") == "length":
+        raise RuntimeError("Model output was truncated (finish_reason=length).")
+    try:
+        return json.loads(content)
+    except (ValueError, TypeError):
+        raise RuntimeError("Model did not return valid JSON.") from None
 
 
 REQUIRED_TOP = ("topic", "research_brief", "languages", "storyboard", "platform_variants")

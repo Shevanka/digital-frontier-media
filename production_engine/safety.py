@@ -42,6 +42,12 @@ def md_url(value: object) -> str:
     )
 
 
+def safe_log(text: object, limit: int = 500) -> str:
+    """Redact secrets, strip terminal control characters and cap the length of a log line."""
+    cleaned = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", redact(text))
+    return cleaned if len(cleaned) <= limit else cleaned[:limit] + "..."
+
+
 def redact(text: object) -> str:
     """Remove API-key-looking strings, bearer tokens and the configured key from text."""
     out = str(text)
