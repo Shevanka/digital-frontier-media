@@ -13,7 +13,7 @@ from pathlib import Path
 UA = "DigitalFrontierResearchBot/0.1"
 
 def clean_html(value: str) -> str:
-    return re.sub(r"\\s+", " ", unescape(re.sub(r"<[^>]+>", " ", value or ""))).strip()
+    return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", value or ""))).strip()
 
 def parse_date(value: str) -> str | None:
     if not value:
