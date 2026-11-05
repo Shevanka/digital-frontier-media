@@ -1,0 +1,47 @@
+{
+  "discovery_note": "RSS headlines and summaries are discovery leads only. Verify all claims against original sources.",
+  "feeds": [
+    {
+      "name": "The Hacker News",
+      "url": "https://feeds.feedburner.com/TheHackersNews",
+      "pillar": "Cybersecurity",
+      "trust": "secondary"
+    },
+    {
+      "name": "CISA Alerts",
+      "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+      "pillar": "Cybersecurity",
+      "trust": "primary_or_institutional"
+    },
+    {
+      "name": "Google AI Blog",
+      "url": "https://blog.google/technology/ai/rss/",
+      "pillar": "AI",
+      "trust": "primary"
+    },
+    {
+      "name": "TechCrunch",
+      "url": "https://techcrunch.com/feed/",
+      "pillar": "Technology",
+      "trust": "secondary"
+    }
+  ],
+  "google_news_queries": [
+    {
+      "query": "artificial intelligence AI agents technology",
+      "pillar": "AI"
+    },
+    {
+      "query": "cybersecurity vulnerability data breach",
+      "pillar": "Cybersecurity"
+    },
+    {
+      "query": "robotics technology innovation",
+      "pillar": "Technology"
+    },
+    {
+      "query": "digital society internet culture technology",
+      "pillar": "Future & Digital Society"
+    }
+  ]
+}
