@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import email.utils
+import json
+import re
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from html import unescape
+from pathlib import Path
+
+UA = "DigitalFrontierResearchBot/0.1"
+
+def clean_html(value: str) -> str:
+    return re.sub(r"\\s+", " ", unescape(re.sub(r"<[^>]+>", " ", value or ""))).strip()
+
+def parse_date(value: str) -> str | None:
+    if not value:
+        return None
+    try:
+        dt = email.utils.parsedate_to_datetime(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+def fetch_feed(url: str, name: str, pillar: str, trust: str, timeout: int = 20) -> list[dict]:
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        raw = response.read(3_000_000)
+    root = ET.fromstring(raw)
+    out = []
+    for node in root.findall(".//item"):
+        title = clean_html(node.findtext("title", ""))
+        link = (node.findtext("link", "") or "").strip()
+        if title and link:
+            out.append({"title": title, "url": link, "summary": clean_html(node.findtext("description", ""))[:1200],
+                        "published_at": parse_date(node.findtext("pubDate", "")), "source": name,
+                        "pillar": pillar, "source_trust": trust})
+    if not out:
+        ns = {"a": "http://www.w3.org/2005/Atom"}
+        for node in root.findall("a:entry", ns):
+            title = clean_html(node.findtext("a:title", "", ns))
+            link_node = node.find("a:link", ns)
+            link = link_node.attrib.get("href", "") if link_node is not None else ""
+            if title and link:
+                out.append({"title": title, "url": link, "summary": clean_html(node.findtext("a:summary", "", ns))[:1200],
+                            "published_at": node.findtext("a:updated", "", ns) or None, "source": name,
+                            "pillar": pillar, "source_trust": trust})
+    return out
+
+def discover(root: Path, days: int = 7) -> dict:
+    config = json.loads((Path(__file__).parent / "config" / "sources.json").read_text(encoding="utf-8"))
+    items, errors = [], []
+    for feed in config.get("feeds", []):
+        try:
+            items.extend(fetch_feed(feed["url"], feed["name"], feed["pillar"], feed.get("trust", "secondary")))
+        except Exception as exc:
+            errors.append({"source": feed.get("name", feed["url"]), "error": str(exc)[:300]})
+    for query in config.get("google_news_queries", []):
+        url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query["query"]) + "&hl=en-US&gl=US&ceid=US:en"
+        try:
+            items.extend(fetch_feed(url, "Google News RSS", query["pillar"], "discovery_only"))
+        except Exception as exc:
+            errors.append({"source": "Google News RSS", "error": str(exc)[:300]})
+    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+    seen, unique = set(), []
+    for item in items:
+        key = item["url"].split("?")[0].rstrip("/")
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            stamp = datetime.fromisoformat(item["published_at"].replace("Z", "+00:00")).timestamp() if item.get("published_at") else 0
+        except Exception:
+            stamp = 0
+        if stamp and stamp < cutoff:
+            continue
+        item["freshness"] = "recent" if stamp else "undated"
+        unique.append(item)
+    unique.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+    out = {"generated_at": datetime.now(timezone.utc).isoformat(), "window_days": days,
+           "discovery_note": "Discovery leads only. Verify every claim against original sources.", "items": unique, "errors": errors}
+    folder = root / "research" / "trends"
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    (folder / f"{stamp}.json").write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    lines = [f"# Trend discovery: {stamp}", "", "> Discovery leads only. Do not publish claims until independently verified.", ""]
+    for i, item in enumerate(unique, 1):
+        lines.extend([f"## {i}. {item['title']}", f"- Pillar: {item['pillar']}", f"- Source: {item['source']}",
+                      f"- Published: {item.get('published_at') or 'Unknown'}", f"- URL: {item['url']}", f"- Summary: {item['summary']}", ""])
+    (folder / f"{stamp}.md").write_text("\\n".join(lines), encoding="utf-8")
+    return out
