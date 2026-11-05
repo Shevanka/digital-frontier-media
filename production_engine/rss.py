@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import email.utils
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html import unescape
-try:
-    import certifi, os
-    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-except ImportError:
-    pass
 from pathlib import Path
 
+try:  # optional: use the certifi CA bundle when installed (e.g. Windows/MSYS2)
+    import certifi
+except ImportError:
+    certifi = None
+if certifi is not None:
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+
 UA = "DigitalFrontierResearchBot/0.1"
+MAX_TITLE = 300
+MAX_URL = 2048
 
 def clean_html(value: str) -> str:
     return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", value or ""))).strip()
@@ -31,6 +36,32 @@ def parse_date(value: str) -> str | None:
     except (TypeError, ValueError, OverflowError):
         return None
 
+def parse_iso_date(value: str | None) -> str | None:
+    """Normalise an Atom/ISO-8601 timestamp to UTC ISO format, or None if invalid."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+def safe_url(value: str | None) -> str | None:
+    """Return the URL only if it is a plain http(s) URL with a host; otherwise None."""
+    value = (value or "").strip()
+    if not value or len(value) > MAX_URL or re.search(r"[\x00-\x20\x7f]", value):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(value)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not host or parts.username or parts.password:
+        return None
+    return value
+
 def fetch_feed(url: str, name: str, pillar: str, trust: str, timeout: int = 20) -> list[dict]:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -38,8 +69,8 @@ def fetch_feed(url: str, name: str, pillar: str, trust: str, timeout: int = 20) 
     root = ET.fromstring(raw)
     out = []
     for node in root.findall(".//item"):
-        title = clean_html(node.findtext("title", ""))
-        link = (node.findtext("link", "") or "").strip()
+        title = clean_html(node.findtext("title", ""))[:MAX_TITLE]
+        link = safe_url(node.findtext("link", ""))
         if title and link:
             out.append({"title": title, "url": link, "summary": clean_html(node.findtext("description", ""))[:1200],
                         "published_at": parse_date(node.findtext("pubDate", "")), "source": name,
@@ -47,14 +78,19 @@ def fetch_feed(url: str, name: str, pillar: str, trust: str, timeout: int = 20) 
     if not out:
         ns = {"a": "http://www.w3.org/2005/Atom"}
         for node in root.findall("a:entry", ns):
-            title = clean_html(node.findtext("a:title", "", ns))
+            title = clean_html(node.findtext("a:title", "", ns))[:MAX_TITLE]
             link_node = node.find("a:link", ns)
-            link = link_node.attrib.get("href", "") if link_node is not None else ""
+            link = safe_url(link_node.attrib.get("href", "")) if link_node is not None else None
             if title and link:
                 out.append({"title": title, "url": link, "summary": clean_html(node.findtext("a:summary", "", ns))[:1200],
-                            "published_at": node.findtext("a:updated", "", ns) or None, "source": name,
+                            "published_at": parse_iso_date(node.findtext("a:updated", "", ns)), "source": name,
                             "pillar": pillar, "source_trust": trust})
     return out
+
+def _timestamp(item: dict) -> float:
+    """Parsed publication time (0 when missing/invalid, so such items sort last)."""
+    iso = parse_iso_date(item.get("published_at"))
+    return datetime.fromisoformat(iso).timestamp() if iso else 0
 
 def discover(root: Path, days: int = 7) -> dict:
     config = json.loads((Path(__file__).parent / "config" / "sources.json").read_text(encoding="utf-8"))
@@ -77,15 +113,12 @@ def discover(root: Path, days: int = 7) -> dict:
         if key in seen:
             continue
         seen.add(key)
-        try:
-            stamp = datetime.fromisoformat(item["published_at"].replace("Z", "+00:00")).timestamp() if item.get("published_at") else 0
-        except Exception:
-            stamp = 0
+        stamp = _timestamp(item)
         if stamp and stamp < cutoff:
             continue
         item["freshness"] = "recent" if stamp else "undated"
         unique.append(item)
-    unique.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+    unique.sort(key=_timestamp, reverse=True)
     out = {"generated_at": datetime.now(timezone.utc).isoformat(), "window_days": days,
            "discovery_note": "Discovery leads only. Verify every claim against original sources.", "items": unique, "errors": errors}
     folder = root / "research" / "trends"

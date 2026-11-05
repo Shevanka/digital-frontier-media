@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 from . import __version__
-from .engine import build_prompt, call_llm, latest_trends, read_idea, render_package, validate_package
+from .engine import build_messages, call_llm, enforce_source_policy, latest_trends, read_idea, render_package, validate_package
 from .rss import discover
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,25 +51,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Saved {len(result['items'])} trend leads; feed errors: {len(result['errors'])}")
         return 0
     if args.command == "produce":
+        if not 1 <= args.trend_limit <= 50:
+            parser.error("--trend-limit must be between 1 and 50")
         load_dotenv()
         try:
             idea_path, idea_text = read_idea(args.root, args.idea)
             trends = latest_trends(args.root, args.trend_limit)
             brand = (args.root / "docs" / "BRAND_GUIDE.md").read_text(encoding="utf-8")
             policy = (args.root / "research" / "RESEARCH_AND_FACT_CHECK_POLICY.md").read_text(encoding="utf-8")
-            data = call_llm(build_prompt(idea_text, trends, brand, policy))
+            data = call_llm(build_messages(idea_text, trends, brand, policy))
             errors = validate_package(data)
             if errors:
                 print("\n".join(errors), file=sys.stderr)
                 return 2
-            known_urls = {item.get("url") for item in trends}
-            for source in data.get("research_brief", {}).get("sources", []):
-                if source.get("url") not in known_urls:
-                    source["url"] = ""
-                    source["source_type"] = "suggested_source_not_yet_verified"
-                    for claim in data.get("research_brief", {}).get("claims", []):
-                        if source.get("id") in claim.get("source_ids", []):
-                            claim["status"] = "NEEDS_VERIFICATION"
+            for note in enforce_source_policy(data, trends):
+                print(note, file=sys.stderr)
             out = render_package(args.root, idea_path, idea_text, data)
             print(f"Package created: {out.relative_to(args.root)}")
             print("DRAFT only. Human fact-check and approval are mandatory.")
