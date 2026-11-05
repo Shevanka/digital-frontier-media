@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+content/production/*
+research/trends/*.json
+research/trends/*.md
