@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Saved {len(result['items'])} trend leads; feed errors: {len(result['errors'])}")
         return 0
     if args.command == "produce":
+        if not 1 <= args.trend_limit <= 50:
+            parser.error("--trend-limit must be between 1 and 50")
         load_dotenv()
         try:
             idea_path, idea_text = read_idea(args.root, args.idea)
